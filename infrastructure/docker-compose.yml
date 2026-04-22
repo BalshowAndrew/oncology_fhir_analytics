@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  # База данных PostgreSQL для хранения ресурсов FHIR
+  db:
+    image: postgres:15-alpine
+    container_name: hapi-postgres
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: hapifhir
+      POSTGRES_USER: hapi
+      POSTGRES_PASSWORD: hapi_password
+    command: >
+      postgres 
+      -c max_connections=100
+      -c shared_buffers=4GB
+      -c work_mem=64MB
+      -c max_wal_size=4GB
+      -c min_wal_size=1GB
+    ports:
+      - "5432:5432"
+
+  # Сервер HAPI FHIR
+  hapi-fhir:
+    image: hapifhir/hapi-fhir-jpaserver-starter:latest
+    container_name: hapi-fhir-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    environment:
+      # Настройки подключения к БД
+      spring.datasource.url: jdbc:postgresql://db:5432/hapifhir
+      spring.datasource.username: hapi
+      spring.datasource.password: hapi_password
+      spring.datasource.driver-class-name: org.postgresql.Driver
+      spring.jpa.properties.hibernate.dialect: org.hibernate.dialect.PostgreSQLDialect
+      
+      # Настройки версии FHIR
+      hapi.fhir.fhir_version: R4
+      
+      # ВКЛЮЧАЕМ BULK EXPORT И ПАКЕТНЫЕ ОПЕРАЦИИ
+      hapi.fhir.bulk_export_enabled: "true"
+      hapi.fhir.batch_jobs_enabled: "true"
+      
+      # Поддержка бинарных данных (для результатов экспорта)
+      hapi.fhir.binary_storage_enabled: "true"
+      
+      # Тюнинг памяти JVM (выделяем 12 ГБ из твоих 32 ГБ)
+      JAVA_OPTS: "-Xms4G -Xmx12G"
+      
+      # Отключаем валидацию при загрузке (ускоряет импорт Synthea в разы)
+      hapi.fhir.validation.enabled: "false"
+      
+    volumes:
+      # Маппинг папки для выгрузки результатов Bulk Export
+      - ../data/fhir_export:/target/bitlinks
+
+volumes:
+  postgres_data:
