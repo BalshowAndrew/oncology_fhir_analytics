@@ -12,3 +12,7 @@ wheels/
 # Datas
 data/
 tools/
+
+# Environment variables
+.env
+infrastructure/envs/*.env
