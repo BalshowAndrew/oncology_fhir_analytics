@@ -15,6 +15,7 @@ tools/
 
 # Repositories
 infrastructure/hapi-fhir-jpaserver-starter/
+infrastructure/clickhouse_data
 
 # Environment variables
 .env
