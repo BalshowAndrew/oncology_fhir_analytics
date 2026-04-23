@@ -1,63 +1,57 @@
-version: '3.8'
-
 services:
-  # База данных PostgreSQL для хранения ресурсов FHIR
+  # База данных PostgreSQL
   db:
     image: postgres:15-alpine
     container_name: hapi-postgres
     restart: unless-stopped
+    env_file: .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: hapifhir
-      POSTGRES_USER: hapi
-      POSTGRES_PASSWORD: hapi_password
     command: >
       postgres 
-      -c max_connections=100
-      -c shared_buffers=4GB
-      -c work_mem=64MB
-      -c max_wal_size=4GB
-      -c min_wal_size=1GB
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS}
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS}
+      -c work_mem=${POSTGRES_WORK_MEM}
+      -c max_wal_size=${POSTGRES_MAX_WAL_SIZE}
+      -c min_wal_size=${POSTGRES_MIN_WAL_SIZE}
     ports:
       - "5432:5432"
 
   # Сервер HAPI FHIR
   hapi-fhir:
-    image: hapifhir/hapi-fhir-jpaserver-starter:latest
+    image: hapi-fhir-jpaserver-starter-hapi-fhir-jpaserver-start:latest
     container_name: hapi-fhir-server
     restart: unless-stopped
-    ports:
-      - "8080:8080"
     depends_on:
       - db
+    env_file: .env
     environment:
-      # Настройки подключения к БД
-      spring.datasource.url: jdbc:postgresql://db:5432/hapifhir
-      spring.datasource.username: hapi
-      spring.datasource.password: hapi_password
-      spring.datasource.driver-class-name: org.postgresql.Driver
-      spring.jpa.properties.hibernate.dialect: org.hibernate.dialect.PostgreSQLDialect
+      # Маппинг переменных из env-файлов в переменные приложения
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+
+      SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+
+      HAPI_FHIR_FHIR_VERSION: ${HAPI_FHIR_VERSION}
+      HAPI_FHIR_BULK_EXPORT_ENABLED: ${HAPI_BULK_EXPORT_ENABLED}
+      HAPI_FHIR_BATCH_JOBS_ENABLED: ${HAPI_BATCH_JOBS_ENABLED}
+      HAPI_FHIR_BINARY_STORAGE_ENABLED: ${HAPI_BINARY_STORAGE_ENABLED}
+      HAPI_FHIR_VALIDATION_ENABLED: ${HAPI_FHIR_VALIDATION_ENABLED}
+      HAPI_FHIR_BINARY_STORAGE_MODULE: DATASTORE
+      HAPI_FHIR_TARGET_DIRECTORY: ${HAPI_EXPORT_DIR}
+
+      HAPI_FHIR_ALLOW_EXTERNAL_REFERENCES: ${HAPI_FHIR_ALLOW_EXTERNAL_REFERENCES}
+      HAPI_FHIR_AUTO_CREATE_PLACEHOLDER_REFERENCES: ${HAPI_FHIR_AUTO_CREATE_PLACEHOLDER_REFERENCES}
+      HAPI_FHIR_EXTERNAL_REFERENCES_ENABLED: ${HAPI_FHIR_EXTERNAL_REFERENCES_ENABLED}
+      HAPI_FHIR_ALLOW_ID_AND_RESOURCETYPE_IN_UPSERT_URLS: ${HAPI_FHIR_ALLOW_ID_AND_RESOURCETYPE_IN_UPSERT_URLS}
       
-      # Настройки версии FHIR
-      hapi.fhir.fhir_version: R4
-      
-      # ВКЛЮЧАЕМ BULK EXPORT И ПАКЕТНЫЕ ОПЕРАЦИИ
-      hapi.fhir.bulk_export_enabled: "true"
-      hapi.fhir.batch_jobs_enabled: "true"
-      
-      # Поддержка бинарных данных (для результатов экспорта)
-      hapi.fhir.binary_storage_enabled: "true"
-      
-      # Тюнинг памяти JVM (выделяем 12 ГБ из твоих 32 ГБ)
-      JAVA_OPTS: "-Xms4G -Xmx12G"
-      
-      # Отключаем валидацию при загрузке (ускоряет импорт Synthea в разы)
-      hapi.fhir.validation.enabled: "false"
-      
+      JAVA_OPTS: ${HAPI_JAVA_OPTS}
+    ports:
+      - "8080:8080"
     volumes:
-      # Маппинг папки для выгрузки результатов Bulk Export
-      - ../data/fhir_export:/target/bitlinks
+      - ../data/fhir_export:${HAPI_EXPORT_DIR}
 
 volumes:
   postgres_data:

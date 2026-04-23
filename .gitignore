@@ -13,6 +13,9 @@ wheels/
 data/
 tools/
 
+# Repositories
+infrastructure/hapi-fhir-jpaserver-starter/
+
 # Environment variables
 .env
 infrastructure/envs/*.env
