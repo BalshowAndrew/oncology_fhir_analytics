@@ -1,87 +1,84 @@
 import os
 import json
 import requests
+import random
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
-FHIR_SERVER_URL = "http://localhost:8080/fhir/" 
-DATA_DIR = "./data/raw_oncology" 
+FHIR_SERVER_URL = "http://localhost:8080/fhir/"
+DATA_DIR = "./data/raw_synthea/fhir"
+TARGET_CODES = ["363406005", "109838007", "93761005", "254637007", "254632001"]
+MAX_WORKERS = 20  # Количество параллельных потоков загрузки
+CONTROL_GROUP_SIZE = 5000 # Сколько здоровых пациентов добавить к 5673 больным
 
-def clean_fhir_resource(obj):
-    """Сургически удаляет только проблемные ссылки, не ломая ресурс."""
-    if isinstance(obj, dict):
-        # Если это объект-ссылка
-        if 'reference' in obj and isinstance(obj['reference'], str):
-            ref = obj['reference']
-            # Оставляем только ссылки на Пациентов. 
-            # Все остальные (Practitioner, Location) превращаем в заглушку, 
-            # либо удаляем саму ссылку, чтобы не злить сервер.
-            if not ref.startswith('Patient/'):
-                return None # Удаляем только этот конкретный объект ссылки
-        
-        # Рекурсивно чистим все поля
-        new_dict = {}
-        for k, v in obj.items():
-            cleaned_v = clean_fhir_resource(v)
-            if cleaned_v is not None:
-                new_dict[k] = cleaned_v
-        return new_dict
-    
-    elif isinstance(obj, list):
-        # Чистим элементы списка, удаляя те, что стали None
-        return [res for res in (clean_fhir_resource(i) for i in obj) if res is not None]
-    
-    return obj
-
-def upload_bundles():
-    path = Path(DATA_DIR)
-    files = list(path.glob("*.json"))
-    
-    if not files:
-        print(f"Файлы не найдены!")
-        return
-
-    clinical_resources = ['Patient', 'Condition', 'Observation', 'Procedure', 'Encounter', 'MedicationRequest']
-
-    print(f"Найдено {len(files)} пациентов. Начинаем ПРАВИЛЬНУЮ загрузку...")
-
-    for file_path in tqdm(files, desc="Загрузка"):
-        with open(file_path, 'r') as f:
-            try:
-                bundle = json.load(f)
-                bundle['type'] = 'transaction'
-                
-                new_entries = []
-                for entry in bundle.get('entry', []):
-                    res = entry.get('resource')
-                    if not res or res.get('resourceType') not in clinical_resources:
-                        continue
-                    
-                    # ЧИСТИМ ТОЛЬКО ССЫЛКИ, а не весь ресурс!
-                    res_type = res['resourceType']
-                    res_id = res['id']
-                    
-                    # Для пациента чистка не нужна, для остальных — ювелирная
-                    cleaned_res = clean_fhir_resource(res) if res_type != 'Patient' else res
-                    
-                    if cleaned_res:
-                        entry['resource'] = cleaned_res
-                        entry['request'] = {"method": "PUT", "url": f"{res_type}/{res_id}"}
-                        new_entries.append(entry)
-                
-                bundle['entry'] = new_entries
-
-                response = requests.post(
-                    FHIR_SERVER_URL, 
-                    json=bundle, 
-                    headers={"Content-Type": "application/fhir+json"}
-                )
-                
-                if response.status_code not in [200, 201]:
-                    print(f"\nОшибка {response.status_code} в {file_path.name}")
+def upload_bundle(file_path):
+    """Загружает один файл на сервер"""
+    with open(file_path, 'r') as f:
+        try:
+            bundle = json.load(f)
+            # Убеждаемся, что тип Bundle - transaction
+            bundle['type'] = 'transaction'
+            for entry in bundle.get('entry', []):
+                res = entry.get('resource')
+                if res:
+                    # Настраиваем UPSERT (создать или обновить по ID)
+                    entry['request'] = {
+                        "method": "PUT",
+                        "url": f"{res['resourceType']}/{res['id']}"
+                    }
             
-            except Exception as e:
-                print(f"\nСбой в файле {file_path.name}: {e}")
+            response = requests.post(
+                FHIR_SERVER_URL,
+                json=bundle,
+                headers={"Content-Type": "application/fhir+json"},
+                timeout=30
+            )
+            return response.status_code in [200, 201]
+        except Exception as e:
+            return False
+
+def prepare_file_lists():
+    path = Path(DATA_DIR)
+    all_files = list(path.glob("*.json"))
+    
+    infra_files = []
+    target_files = []
+    other_files = []
+
+    print("Сортировка файлов...")
+    for f in tqdm(all_files):
+        if "Information" in f.name:
+            infra_files.append(f)
+        else:
+            # Быстрая проверка на онкологию
+            with open(f, 'r') as file:
+                content = file.read()
+                if any(code in content for code in TARGET_CODES):
+                    target_files.append(f)
+                else:
+                    other_files.append(f)
+    
+    # Формируем итоговый список: инфраструктура + все больные + часть здоровых
+    random.seed(123)
+    selected_control = random.sample(other_files, min(len(other_files), CONTROL_GROUP_SIZE))
+    
+    return infra_files, target_files + selected_control
+
+def main():
+    infra_files, clinical_files = prepare_file_lists()
+    
+    # 1. Сначала загружаем инфраструктуру (строго последовательно)
+    print(f"\nЗагрузка инфраструктуры ({len(infra_files)} файлов)...")
+    for f in tqdm(infra_files):
+        upload_bundle(f)
+
+    # 2. Загружаем клинические данные (многопоточно)
+    print(f"\nЗагрузка пациентов ({len(clinical_files)} файлов) в {MAX_WORKERS} потоков...")
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        list(tqdm(executor.map(upload_bundle, clinical_files), total=len(clinical_files)))
+
+    print("\n--- Загрузка завершена! ---")
 
 if __name__ == "__main__":
-    upload_bundles()
+    main()

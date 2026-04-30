@@ -1,76 +1,97 @@
+version: '3.8'
+
 services:
-  # База данных PostgreSQL
+  # База данных: хранилище для HAPI FHIR
   db:
     image: postgres:15-alpine
     container_name: hapi-postgres
     restart: unless-stopped
     env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     command: >
       postgres 
       -c max_connections=${POSTGRES_MAX_CONNECTIONS}
       -c shared_buffers=${POSTGRES_SHARED_BUFFERS}
-      -c work_mem=${POSTGRES_WORK_MEM}
       -c max_wal_size=${POSTGRES_MAX_WAL_SIZE}
       -c min_wal_size=${POSTGRES_MIN_WAL_SIZE}
+      -c checkpoint_completion_target=0.9
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Сервер HAPI FHIR
   hapi-fhir:
-    image: hapi-fhir-jpaserver-starter-hapi-fhir-jpaserver-start:latest
+    build: 
+      context: ../tools/hapi-fhir-jpaserver-starter  # Путь к клонированному репозиторию
+      dockerfile: Dockerfile
     container_name: hapi-fhir-server
     restart: unless-stopped
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     env_file: .env
     environment:
-      # Маппинг переменных из env-файлов в переменные приложения
+      # Подключение к БД
       SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
       SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
-
       SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
 
+      # Основные настройки FHIR
       HAPI_FHIR_FHIR_VERSION: ${HAPI_FHIR_VERSION}
       HAPI_FHIR_BULK_EXPORT_ENABLED: ${HAPI_BULK_EXPORT_ENABLED}
       HAPI_FHIR_BATCH_JOBS_ENABLED: ${HAPI_BATCH_JOBS_ENABLED}
-      HAPI_FHIR_BINARY_STORAGE_ENABLED: ${HAPI_BINARY_STORAGE_ENABLED}
+      
+      # Настройки производительности и валидации
       HAPI_FHIR_VALIDATION_ENABLED: ${HAPI_FHIR_VALIDATION_ENABLED}
-      HAPI_FHIR_BINARY_STORAGE_MODULE: DATASTORE
-      HAPI_FHIR_TARGET_DIRECTORY: ${HAPI_EXPORT_DIR}
-
       HAPI_FHIR_ALLOW_EXTERNAL_REFERENCES: ${HAPI_FHIR_ALLOW_EXTERNAL_REFERENCES}
       HAPI_FHIR_AUTO_CREATE_PLACEHOLDER_REFERENCES: ${HAPI_FHIR_AUTO_CREATE_PLACEHOLDER_REFERENCES}
-      HAPI_FHIR_EXTERNAL_REFERENCES_ENABLED: ${HAPI_FHIR_EXTERNAL_REFERENCES_ENABLED}
       HAPI_FHIR_ALLOW_ID_AND_RESOURCETYPE_IN_UPSERT_URLS: ${HAPI_FHIR_ALLOW_ID_AND_RESOURCETYPE_IN_UPSERT_URLS}
       
+      # Работа с Bulk Export и Binary
+      HAPI_FHIR_BINARY_STORAGE_ENABLED: ${HAPI_BINARY_STORAGE_ENABLED}
+      HAPI_FHIR_BINARY_STORAGE_MODULE: DATASTORE
+      HAPI_FHIR_TARGET_DIRECTORY: ${HAPI_EXPORT_DIR_CONTAINER}
+      
+      # Удаление данных (для очистки базы в процессе разработки)
+      HAPI_FHIR_EXPUNGE_ENABLED: "true"
+      HAPI_FHIR_ALLOW_MULTIPLE_DELETE: "true"
+      
+      # Настройка памяти Java
       JAVA_OPTS: ${HAPI_JAVA_OPTS}
     ports:
       - "8080:8080"
     volumes:
-      - ../data/fhir_export:${HAPI_EXPORT_DIR}
+      # Маппинг папки для Bulk Export NDJSON файлов
+      - ${HAPI_EXPORT_DIR_HOST}:${HAPI_EXPORT_DIR_CONTAINER}
 
-  # ClickHouse
+  # ClickHouse: наша аналитическая БД
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     container_name: clickhouse-oncology
     restart: unless-stopped
     env_file: .env 
     environment:
-      # ClickHouse подхватит эти переменные для создания начальной БД и юзера
-      - CLICKHOUSE_DB=${CLICKHOUSE_DB}
-      - CLICKHOUSE_USER=${CLICKHOUSE_USER}
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
-      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=${CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: ${CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT}
     ports:
       - "8123:8123"
       - "9000:9000"
     volumes:
-      - ./clickhouse_data:/var/lib/clickhouse
-      - ./clickhouse_init:/docker-entrypoint-initdb.d
+      - clickhouse_data:/var/lib/clickhouse
+      - ./infrastructure/clickhouse_init:/docker-entrypoint-initdb.d
     ulimits:
       nofile:
         soft: 262144
@@ -80,7 +101,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-    
 
 volumes:
   postgres_data:
+  clickhouse_data:
