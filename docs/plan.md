@@ -8,12 +8,11 @@
         - Первичная загрузка бандлов в HAPI FHIR через Batch/Transaction.
     - [+] Реализация Bulk Export Pipeline:
         - Инициирование операции $export на уровне всей системы (System-level export).
-        - Мониторинг статуса (Status Polling) через Content-Location.
         - Выгрузка NDJSON-файлов.
     - [ ] Инъекция в ClickHouse:
         - Создание схем таблиц в ClickHouse.
         - Парсинг NDJSON и загрузка данных.
-        - Оптимизация процесса через INSERT FROM SELECT или прямую загрузку файлов.
+        - Оптимизация процесса.
 1. Системный анализ и предобработка данных в ClickHouse
     - [ ] Описание маппинга:
         - Преобразование FHIR-ресурсов (Condition, Observation, Procedure) в аналитический плоский вид.
