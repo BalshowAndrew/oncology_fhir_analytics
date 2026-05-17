@@ -186,7 +186,7 @@ wc -l data/fhir_export/*.ndjson
 Заключительным этапом создания инфраструктуры (Глава 1.5) является трансформация иерархических FHIR-данных в плоскую колоночную структуру, оптимизированную для машинного обучения и статистического анализа.
 
 #### 5.1 Архитектура ETL-процесса
-Для загрузки данных реализован модульный подход **«Один загрузчик — много парсеров»** (скрипт `src/master_loader.py`). Это позволяет масштабировать систему на новые ресурсы (Observation, Procedure) без дублирования кода.
+Для загрузки данных реализован модульный подход **«Один загрузчик — много парсеров»** (скрипт `src/master_loader.py`). Это позволяет масштабировать систему на новые ресурсы (Patient, Observation, Procedure и др.) без дублирования кода.
 
 **Ключевые особенности реализации:**
 *   **Трансформация данных:** Конвертация JSON-строк в нативные объекты Python (`datetime`, `uuid`), что обеспечивает корректную бинарную вставку в ClickHouse.
@@ -199,23 +199,6 @@ wc -l data/fhir_export/*.ndjson
 #### 5.2 Инициализация схем данных
 Перед загрузкой необходимо создать целевую базу данных и таблицы. Схемы спроектированы с учетом специфики прогнозирования рака толстой кишки.
 
-```sql
--- Создание базы данных patients
-CREATE DATABASE IF NOT EXISTS oncology;
-
--- Таблица пациентов (фрагмент схемы)
-CREATE TABLE IF NOT EXISTS oncology.patients (
-    patient_id UUID,
-    birth_sex Enum8('M' = 1, 'F' = 2, 'UNK' = 3),
-    birth_date Nullable(Date32),
-    deceased_at Nullable(DateTime64(3, 'UTC')),
-    is_deceased UInt8,
-    race LowCardinality(String),
-    -- ... остальные поля ...
-    updated_at DateTime DEFAULT now()
-) ENGINE = MergeTree() ORDER BY (patient_id);
-```
-
 #### 5.3 Команды запуска загрузки
 
 ```bash
@@ -223,7 +206,7 @@ CREATE TABLE IF NOT EXISTS oncology.patients (
 python3 src/master_loader.py
 
 # Верификация загрузки в ClickHouse
-clickhouse-client --database oncology --query "SELECT count() FROM patients"
+docker exec -it [container-name] clickhouse-client --database oncology --query "SELECT count() FROM [table-name]"
 ```
 
 
