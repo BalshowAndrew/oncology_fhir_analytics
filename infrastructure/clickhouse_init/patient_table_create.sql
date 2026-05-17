@@ -1,3 +1,5 @@
+-- DROP TABLE IF EXISTS oncology.patients;
+
 CREATE TABLE oncology.patients (
     patient_id UUID,
     gender LowCardinality(String),

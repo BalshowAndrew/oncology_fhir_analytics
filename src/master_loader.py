@@ -99,6 +99,132 @@ class FhirParsers:
                         if geo.get('url') == 'longitude': row["lon"] = float(geo.get('valueDecimal', 0.0))
         
         return row
+    
+    @staticmethod
+    def clean_ref(ref_str):
+        """Удаляет префиксы 'Patient/' или 'Encounter/' из ссылок"""
+        if not ref_str: return None
+        return uuid.UUID(ref_str.split('/')[-1])
+
+    @classmethod
+    def condition(cls, res):
+        code_coding = res.get('code', {}).get('coding', [{}])[0]
+        
+        # Пытаемся получить дату начала, если её нет - берем дату записи, 
+        # если и её нет - используем "эпоху" (1900 год)
+        onset_val = cls.parse_datetime(res.get('onsetDateTime'))
+        recorded_val = cls.parse_datetime(res.get('recordedDate'))
+        
+        # Гарантируем отсутствие None для колонки в ORDER BY
+        final_onset = onset_val or recorded_val or datetime(1900, 1, 1)
+
+        row = {
+            "condition_id": uuid.UUID(res['id']),
+            "patient_id": cls.clean_ref(res.get('subject', {}).get('reference')),
+            "encounter_id": cls.clean_ref(res.get('encounter', {}).get('reference')),
+            "code": code_coding.get('code', 'Unknown'),
+            "display": code_coding.get('display', 'Unknown'),
+            "clinical_status": res.get('clinicalStatus', {}).get('coding', [{}])[0].get('code', 'unknown'),
+            "verification_status": res.get('verificationStatus', {}).get('coding', [{}])[0].get('code', 'unknown'),
+            "onset_at": final_onset, # Здесь теперь точно не None
+            "abatement_at": cls.parse_datetime(res.get('abatementDateTime')),
+            "recorded_at": recorded_val
+        }
+        return row
+
+    @classmethod
+    def observation(cls, res):
+        code_coding = res.get('code', {}).get('coding', [{}])[0]
+        category = res.get('category', [{}])[0].get('coding', [{}])[0].get('code', 'unknown')
+        effective_at = cls.parse_datetime(res.get('effectiveDateTime')) or datetime(1900, 1, 1)
+
+        val_num = None
+        val_str = None
+        unit = ""
+        
+        # 1. Если это число (Quantity)
+        if 'valueQuantity' in res:
+            val_num = float(res['valueQuantity'].get('value', 0))
+            unit = res['valueQuantity'].get('unit', '')
+            
+        # 2. Если это код (CodeableConcept)
+        elif 'valueCodeableConcept' in res:
+            # Пытаемся взять человекочитаемый текст или display кода
+            val_str = res['valueCodeableConcept'].get('text')
+            if not val_str and 'coding' in res['valueCodeableConcept']:
+                val_str = res['valueCodeableConcept']['coding'][0].get('display')
+        
+        # 3. Если это просто строка
+        elif 'valueString' in res:
+            val_str = res['valueString']
+            
+        # 4. Если это логическое значение
+        elif 'valueBoolean' in res:
+            val_str = str(res['valueBoolean'])
+
+        row = {
+            "observation_id": uuid.UUID(res['id']),
+            "patient_id": cls.clean_ref(res.get('subject', {}).get('reference')),
+            "encounter_id": cls.clean_ref(res.get('encounter', {}).get('reference')),
+            "category": category,
+            "code": code_coding.get('code', 'Unknown'),
+            "display": code_coding.get('display', 'Unknown'),
+            "value_number": val_num,
+            "value_string": val_str,
+            "unit": unit,
+            "effective_at": effective_at
+        }
+        return row
+
+    @classmethod
+    def encounter(cls, res):
+        """Парсер для ресурса Encounter"""
+        # Тип визита
+        type_info = res.get('type', [{}])[0].get('coding', [{}])[0]
+        
+        # Причина визита (reasonCode) - может отсутствовать
+        reason = None
+        if 'reasonCode' in res and res['reasonCode']:
+            reason = res['reasonCode'][0].get('coding', [{}])[0].get('display')
+
+        return {
+            "encounter_id": uuid.UUID(res['id']),
+            "patient_id": cls.clean_ref(res.get('subject', {}).get('reference')),
+            "start_at": cls.parse_datetime(res.get('period', {}).get('start')) or datetime(1900, 1, 1),
+            "end_at": cls.parse_datetime(res.get('period', {}).get('end')) or datetime(1900, 1, 1),
+            "class_code": res.get('class', {}).get('code', 'unknown'),
+            "display": type_info.get('display', 'Unknown'),
+            "reason_display": reason,
+            "status": res.get('status', 'unknown')
+        }
+
+    @classmethod
+    def procedure(cls, res):
+        """Парсер для ресурса Procedure с обработкой ссылок на причины"""
+        code_coding = res.get('code', {}).get('coding', [{}])[0]
+        
+        # Ссылка на причину (Condition)
+        reason_id = None
+        if 'reasonReference' in res and res['reasonReference']:
+            reason_ref = res['reasonReference'][0].get('reference', '')
+            if 'Condition/' in reason_ref:
+                reason_id = uuid.UUID(reason_ref.split('/')[-1])
+
+        # Время проведения (может быть DateTime или Period)
+        start_dt = res.get('performedDateTime') or res.get('performedPeriod', {}).get('start')
+        end_dt = res.get('performedPeriod', {}).get('end') if 'performedPeriod' in res else None
+
+        return {
+            "procedure_id": uuid.UUID(res['id']),
+            "patient_id": cls.clean_ref(res.get('subject', {}).get('reference')),
+            "encounter_id": cls.clean_ref(res.get('encounter', {}).get('reference')),
+            "reason_condition_id": reason_id,
+            "code": code_coding.get('code', 'Unknown'),
+            "display": code_coding.get('display', 'Unknown'),
+            "performed_at": cls.parse_datetime(start_dt) or datetime(1900, 1, 1),
+            "end_at": cls.parse_datetime(end_dt),
+            "status": res.get('status', 'unknown')
+        }  
 
 class ClickHouseLoader:
     def __init__(self):
@@ -109,6 +235,10 @@ class ClickHouseLoader:
         
         self.registry = {
             'Patient': (FhirParsers.patient, 'patients'),
+            'Condition': (FhirParsers.condition, 'conditions'),
+            'Observation': (FhirParsers.observation, 'observations'),
+            'Encounter': (FhirParsers.encounter, 'encounters'),
+            'Procedure': (FhirParsers.procedure, 'procedures'),
         }
         
         try:
@@ -146,4 +276,8 @@ class ClickHouseLoader:
 
 if __name__ == "__main__":
     loader = ClickHouseLoader()
-    loader.load_resource('Patient')
+    # loader.load_resource('Patient')
+    # loader.load_resource('Condition')
+    # loader.load_resource('Observation')
+    # loader.load_resource('Encounter')
+    loader.load_resource('Procedure')
