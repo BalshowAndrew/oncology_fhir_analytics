@@ -19,23 +19,63 @@ CREATE TABLE oncology.patients (
 ) ENGINE = MergeTree()
 ORDER BY (patient_id);
 
--- -- Таблица для диагнозов (Conditions)
--- CREATE TABLE IF NOT EXISTS raw_conditions (
---     patient_id String,
---     condition_id String,
---     code String,
---     display String,
---     recorded_date DateTime,
---     clinical_status String
--- ) ENGINE = MergeTree() ORDER BY (patient_id, recorded_date);
+-- Таблица для диагнозов (Conditions)
+CREATE TABLE oncology.conditions (
+    condition_id UUID,
+    patient_id UUID,
+    encounter_id Nullable(UUID),
+    code String,
+    display String,
+    clinical_status LowCardinality(String),
+    verification_status LowCardinality(String),
+    onset_at DateTime64(3, 'UTC') DEFAULT '1900-01-01 00:00:00', 
+    abatement_at Nullable(DateTime64(3, 'UTC')),
+    recorded_at Nullable(DateTime64(3, 'UTC')),
+    updated_at DateTime DEFAULT now()
+) ENGINE = MergeTree()
+ORDER BY (patient_id, onset_at);
 
--- -- Таблица для клинических наблюдений (Observations: стадии, анализы)
--- CREATE TABLE IF NOT EXISTS raw_observations (
---     patient_id String,
---     obs_id String,
---     code String,
---     display String,
---     value_string String,
---     value_quantity Float64,
---     effective_date DateTime
--- ) ENGINE = MergeTree() ORDER BY (patient_id, effective_date);
+-- Таблица для клинических наблюдений (Observations)
+CREATE TABLE oncology.observations (
+    observation_id UUID,
+    patient_id UUID,
+    encounter_id Nullable(UUID),
+    category LowCardinality(String),
+    code String,
+    display String,
+    value_number Nullable(Float64),
+    value_string Nullable(String),
+    unit LowCardinality(String),
+    effective_at DateTime64(3, 'UTC') DEFAULT '1900-01-01 00:00:00',
+    updated_at DateTime DEFAULT now()
+) ENGINE = MergeTree()
+ORDER BY (patient_id, effective_at);
+
+-- Таббица для визитов к врачу (Encounter)
+CREATE TABLE oncology.encounters (
+    encounter_id UUID,
+    patient_id UUID,
+    start_at DateTime64(3, 'UTC') DEFAULT '1900-01-01 00:00:00',
+    end_at DateTime64(3, 'UTC') DEFAULT '1900-01-01 00:00:00',
+    class_code LowCardinality(String),
+    display String,
+    reason_display Nullable(String),
+    status LowCardinality(String),
+    updated_at DateTime DEFAULT now()
+) ENGINE = MergeTree()
+ORDER BY (patient_id, start_at);
+
+-- Талбица для процедур (Procedure) - оперативные всешательства, курсы химиотерапии
+CREATE TABLE oncology.procedures (
+    procedure_id UUID,
+    patient_id UUID,
+    encounter_id Nullable(UUID),
+    reason_condition_id Nullable(UUID),
+    code String,
+    display String,
+    performed_at DateTime64(3, 'UTC') DEFAULT '1900-01-01 00:00:00',
+    end_at Nullable(DateTime64(3, 'UTC')),
+    status LowCardinality(String),
+    updated_at DateTime DEFAULT now()
+) ENGINE = MergeTree()
+ORDER BY (patient_id, performed_at);
