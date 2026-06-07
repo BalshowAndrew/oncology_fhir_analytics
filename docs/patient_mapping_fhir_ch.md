@@ -6,43 +6,20 @@
 **Цель:** Таблица `oncology.patients` (ClickHouse)  
 **Версия:** 1.1
 
-### 1. Основные демографические данные
+### Таблица маппинга (Patient)
 
-| Целевая колонка (ClickHouse) | Тип данных (CH) | Путь в FHIR (JSON Path) | Логика трансформации / Комментарий |
+| FHIR Path | ClickHouse Column | Тип данных | Описание |
 | :--- | :--- | :--- | :--- |
-| **patient_id** | `UUID` | `$.id` | Первичный ключ. Конвертация String -> UUID. |
-| **gender** | `LowCardinality(String)` | `$.gender` | Административный пол (male, female, other, unknown). |
-| **birth_sex** | `Enum8` | `$.extension[?(@.url=='...us-core-birthsex')].valueCode` | Биологический пол (M, F, UNK). Критичен для онкологического прогноза. |
-| **birth_date** | `Nullable(Date32)` | `$.birthDate` | Поддержка дат до 1970 года. Конвертация String -> Date. |
-| **deceased_at** | `Nullable(DateTime64)` | `$.deceasedDateTime` | Точка завершения наблюдения для анализа выживаемости. |
-| **is_deceased** | `UInt8` | - | `1` если `deceasedDateTime` присутствует, иначе `0`. |
-| **marital_status** | `LowCardinality(String)`| `$.maritalStatus.text` | Семейное положение на момент выгрузки. |
-
-### 2. Социально-демографические детерминанты (US Core Extensions)
-
-| Целевая колонка (ClickHouse) | Тип данных (CH) | Путь в FHIR (JSON Path) | Логика трансформации / Комментарий |
-| :--- | :--- | :--- | :--- |
-| **race** | `LowCardinality(String)` | `$.extension[?(@.url=='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race')].extension[?(@.url=='text')].valueString` | Расовая принадлежность. |
-| **ethnicity** | `LowCardinality(String)` | `$.extension[?(@.url=='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity')].extension[?(@.url=='text')].valueString` | Этническая принадлежность. |
-
-### 3. Географические данные (Address & Geolocation)
-
-| Целевая колонка (ClickHouse) | Тип данных (CH) | Путь в FHIR (JSON Path) | Логика трансформации / Комментарий |
-| :--- | :--- | :--- | :--- |
-| **city** | `String` | `$.address[0].city` | Город проживания. |
-| **state** | `String` | `$.address[0].state` | Штат (код). Используется для территориального анализа заболеваемости. |
-| **lat** | `Float64` | `$.address[0].extension[?(@.url=='...geolocation')].extension[?(@.url=='latitude')].valueDecimal` | Широта. Для анализа доступности медпомощи. |
-| **lon** | `Float64` | `$.address[0].extension[?(@.url=='...geolocation')].extension[?(@.url=='longitude')].valueDecimal` | Долгота. |
-
-### 4. Служебные поля
-
-| Целевая колонка (ClickHouse) | Тип данных (CH) | Источник | Комментарий |
-| :--- | :--- | :--- | :--- |
-| **updated_at** | `DateTime` | `now()` | Время фактической загрузки записи в ClickHouse. |
-
----
-
-### Примечания по реализации:
-1. **Обработка пустых значений:** Все даты помечены как `Nullable`, так как FHIR не гарантирует их наличие (например, для живых пациентов).
-2. **Оптимизация:** Поля с низкой кардинальностью (Race, Ethnicity, Gender) используют тип `LowCardinality` для ускорения агрегационных запросов в 5-10 раз.
-3. **Геокодирование:** Координаты извлекаются из расширения `geolocation` внутри первого элемента массива `address`.
+| `id` | `patient_id` | `UUID` | Идентификатор пациента (Primary Key) |
+| `gender` | `gender` | `LowCardinality(String)` | Административный пол (male, female, etc.) |
+| `extension[us-core-birthsex]` | `birth_sex` | `Enum8('M'=1, 'F'=2, 'UNK'=3)` | Биологический пол при рождении (US Core) |
+| `birthDate` | `birth_date` | `Nullable(Date32)` | Дата рождения (поддержка дат до 1970 г.) |
+| `deceasedDateTime` | `deceased_at` | `Nullable(DateTime64(3, 'UTC'))`| Дата и время смерти (точка для Survival Analysis) |
+| - | `is_deceased` | `UInt8` | Флаг смерти (1 — умер, 0 — жив, вычисляется по наличию даты смерти) |
+| `extension[us-core-race]` | `race` | `LowCardinality(String)` | Расовая принадлежность (поле text) |
+| `extension[us-core-ethnicity]` | `ethnicity` | `LowCardinality(String)` | Этническая принадлежность (поле text) |
+| `address[0].city` | `city` | `String` | Город проживания |
+| `address[0].state` | `state` | `String` | Код штата проживания |
+| `address[0].extension[lat]` | `lat` | `Float64` | Географическая широта (из US Core Geolocation) |
+| `address[0].extension[lon]` | `lon` | `Float64` | Географическая долгота (из US Core Geolocation) |
+| `maritalStatus.text` | `marital_status` | `LowCardinality(String)` | Семейное положение (текстовое описание) |
